@@ -6,9 +6,9 @@ model tesina24
   forward procedure Scheduling_model
   forward procedure ordinamentoCrescentePesato
   forward procedure ordinamentoRdCrescente
-  forward procedure EuristicoPesato
-  forward procedure EuristicoERD
+  forward procedure Euristico
   forward procedure ordinamentoCasuale
+  forward procedure move
 
   declarations
     n: integer !numero di lavori
@@ -39,12 +39,14 @@ model tesina24
     t1, t2: real !tempi
     z: linctr !funzione obiettivo modello
     order: array(lavori) of integer !ordinamento crescente
-    zpesato: real !valore soluzione EuristicoPesato
-    opesato: array(lavori) of integer !soluzione EuristicoPesato (andando in ordine di job, opesato(j) rappresenta il numero della macchina alla quale è assegnato)
-    zERD: real !valore soluzione EuristicoERD
-    oERD: array(lavori) of integer !soluzione EuristicoERD (andando in ordine di job, oERD(j) rappresenta il numero della macchina alla quale è assegnato)
+    oEuristico: array(lavori) of integer
+    zEuristico: real
     zbest: real !valore soluzione incumbent del multistart
     obest: array(lavori) of integer !soluzione incumbent del multistart
+    zmove: real
+    zmove_best: real
+    omove_best: array(lavori) of integer
+    omove: array(lavori) of integer
     pesi_random: array(lavori) of integer
     solution_status: string !stringa per stato del problema
     max_iter: integer ! massimo numero di iterazioni nel multi-start
@@ -61,32 +63,36 @@ model tesina24
   writeln("Tempo esecuzione modello = ", t2-t1, "secondi")
   Print_Status
   writeln("Stato del problema = ", solution_status) !tipo di soluzione ottenuta
-  
+
   t1:=gettime !tempo inizio esecuzione
   ordinamentoCrescentePesato
-  EuristicoPesato
+  Euristico
   t2:=gettime !tempo fine esecuzione
   writeln("Tempo esecuzione Euristico Pesato = ", t2-t1, "secondi")
-  writeln("\topesato = ", opesato)
-  writeln("\tZ Euristico Pesato = ", zpesato)
-  
+  writeln("\topesato = ", oEuristico)
+  writeln("\tZ Euristico Pesato = ", zEuristico)
+
   t1:=gettime !tempo inizio esecuzione
   ordinamentoRdCrescente
-  EuristicoERD
+  Euristico
   t2:=gettime !tempo fine esecuzione
   writeln("Tempo esecuzione Euristico ERD = ", t2-t1, "secondi")
-  
-    !approccio multi-start
+  writeln("\toERD = ", oEuristico)
+  writeln("\tZ Euristico ERD = ", zEuristico)
+
+  !approccio multi-start
   t1:=gettime !tempo inizio esecuzione
-  zbest:=zpesato
-  obest:=opesato
+  ordinamentoCrescentePesato
+  Euristico
+  zbest:=zEuristico
+  obest:=oEuristico
   max_iter:=10000
   forall(iter in 1..max_iter) do
     ordinamentoCasuale !ordinamento random (guidato)
-    EuristicoPesato !euristicopesato (con ordinamento casuale)
-    if (zpesato < zbest) then
-      zbest:=zpesato
-      obest:=opesato
+    Euristico !euristicopesato (con ordinamento casuale)
+    if (zEuristico < zbest) then
+      zbest:=zEuristico
+      obest:=oEuristico
     end-if
   end-do
   t2:=gettime !tempo fine esecuzione
@@ -94,6 +100,28 @@ model tesina24
   writeln("SOLUZIONE MULTI-START:")
   writeln("\tzbest = ", zbest)
   writeln("\tobest = ", obest)
+
+  !ricerca locale
+  t1:=gettime
+  ordinamentoCrescentePesato
+  Euristico
+  max_iter:=1000
+  zmove_best:= zEuristico
+  omove_best:= oEuristico
+  forall(iter in 1..max_iter) do
+    writeln("iterazione numero ", iter)
+    ordinamentoCasuale !ordinamento random (guidato)
+    move !euristicopesato (con ordinamento casuale)
+    if (zmove < zmove_best) then
+      zmove_best:=zmove
+      omove_best:=omove
+    end-if
+  end-do
+  t2:=gettime
+  writeln("Tempo esecuzione multi-start = ", t2-t1, "secondi")
+  writeln("SOLUZIONE RICERCA LOCALE:")
+  writeln("\tzbest = ", zmove_best)
+  writeln("\tobest = ", omove_best)
   !END OF MAIN
 
   procedure Scheduling_init
@@ -116,16 +144,16 @@ model tesina24
     writeln("\tpesi = ", pesi)
     writeln("\talfa = ", alfa)
     writeln("\tistante di inizio disponibilita macchina = ", disponibilita)
-    
+
     forall(i in lavoriprima, j in lavori, k in macchine) write("S(",i,",",j,",",k,")=", tempiSetup(i,j,k), " ")
     writeln("")
     forall(j in lavori, k in macchine) write("P(",j,",",k,")=", tempiProc(j,k), " ")
     writeln("")
-    
+
   end-procedure
 
-  procedure Scheduling_model 
-    
+  procedure Scheduling_model
+    z:= sum(j in lavori) alfa*T(j) + sum(k in macchine, i in lavoriprima, j in lavori | j<>i+1) (1-alfa)*x(i,j,k)*tempiSetup(i,j,k)
     forall(j in lavori) sum(k in macchine,i in lavoriprima | i<>j-1)  x(i,j,k) = 1
     forall(k in macchine) sum(j in lavori) x(1,j,k) <= 1
     forall(k in macchine)
@@ -144,24 +172,60 @@ model tesina24
       forall(j in lavori | j<>i+1)
         forall(k in macchine)
           x(i,j,k) is_binary
-    z:= sum(j in lavori) alfa*T(j) + sum(k in macchine, i in lavoriprima, j in lavori | j<>i+1) (1-alfa)*x(i,j,k)*tempiSetup(i,j,k)
-          
-    
-    
+
+
     forall(k in macchine, j in lavori, i in lavoriprima) writeln( "\t x(",i,",",j,",",k,") = ", getsol(x(i,j,k)))
   end-procedure
-  
-  
+
+
+  procedure move
+    declarations
+      seqapp : array(lavori) of integer
+      rp, rj: integer
+    end-declarations
+    seqapp:= order
+    !seq:= order
+    zmove:= zEuristico
+    forall(j in lavori) do
+      forall(k in lavori) do
+        seqapp:= order
+        if (k<j) then
+          rp:= order(k)
+          seqapp(k):= seqapp(j)
+          forall(i in lavori | i>k and i<=j) seqapp(i):=order(i-1)
+        else
+          rj:= order(j)
+          seqapp(k):= seqapp(j)
+          forall(i in lavori | i>=j and i<=k)
+            if (i<>n) then
+              seqapp(i):= order(i+1)
+            end-if
+          seqapp(k):= rj
+        end-if
+        writeln("seqapp: ", seqapp)
+        order:= seqapp
+        Euristico
+        writeln("-----")
+        if (zEuristico < zmove) then
+          zmove:= zEuristico
+          omove:= oEuristico
+        end-if
+        writeln(zmove,"--", omove, "--", zmove_best)
+      end-do
+    end-do
+  end-procedure
+
+
   procedure ordinamentoCrescentePesato
     declarations
-      lista_TempisuPesi: array(lavori) of real  
+      lista_TempisuPesi: array(lavori) of real
       used: array(lavori) of integer
       jmin: integer
       minimo: real
     end-declarations
     forall(j in lavori) lista_TempisuPesi(j) := (tempiRD(j) + tempiDD(j)) / (2*pesi(j))
     writeln("\t lista tempi su pesi = ", lista_TempisuPesi)
-    forall(j in lavori) used(j):=0    
+    forall(j in lavori) used(j):=0
     forall(j in lavori) do
       minimo:= M
       forall(k in lavori) do
@@ -181,7 +245,7 @@ model tesina24
     writeln("")
   end-procedure
 
-  procedure EuristicoPesato
+  procedure Euristico
     declarations
       carico: array(macchine) of real !carico di lavoro della macchina
       indprec: array(macchine) of integer !indice precedente differenziato in base alle macchine per i tempi di setup e di lavoro
@@ -192,11 +256,11 @@ model tesina24
       tardiness: real
       Tard : array(lavori) of real   !array dei valori di tardiness dei job (usare T con mpvar come nel modello mi dà errore)
     end-declarations
-    zpesato:=0
+    zEuristico:=0
     forall(k in macchine) do
       carico(k):= disponibilita    !assegno il valore della disponibilità a carico(k) perchè non posso partire con i job finchè non raggiungo quel valore
       indprec(k) := 1
-    end-do 
+    end-do
     !writeln("il carico prima di partire (",disponibilita,") è uguale a ",carico)
     forall(indj in lavori) do
       j:=order(indj)!seguiamo l'ordinamento imposto da order
@@ -204,14 +268,14 @@ model tesina24
       forall(k in macchine) do
         if ( carico(k) < minimo ) then
           minimo:=carico(k)
-          kmin:=k 
+          kmin:=k
         end-if
       end-do
       diff_RD_T := tempiRD(j) - carico(kmin)
       if( diff_RD_T > 0) then
         carico(kmin) += diff_RD_T
       end-if
-      opesato(j):=kmin !assegno lavoro j a macchina kmin
+      oEuristico(j):=kmin !assegno lavoro j a macchina kmin
       carico(kmin)+= tempiSetup(indprec(kmin),j,kmin) + tempiProc(j,kmin) !carico(kmin):=carico(kmin)+tempi(j)
       !writeln("\ttemposetup = ", tempiSetup(indprec(kmin),j,kmin), " e tempoproc = ",tempiProc(j,kmin),"     jobprec=",indprec(kmin),"  jobsucc=", j, " macchina=",kmin)
       tempocarico:=carico(kmin)
@@ -224,7 +288,7 @@ model tesina24
       !writeln("\til tempo di carico del lavoro ",j," uguale a ", tempocarico)
       Tard(j) := tardiness
       !writeln("\tla tardiness  del lavoro ",j," uguale a ", Tard(j))
-      zpesato += alfa*Tard(j) + (1-alfa)*tempiSetup(indprec(kmin),j,kmin)
+      zEuristico += alfa*Tard(j) + (1-alfa)*tempiSetup(indprec(kmin),j,kmin)
       !writeln("\tzpesato è uguale a ", zpesato)
       !writeln("")
       indprec(kmin):= j+1
@@ -233,15 +297,16 @@ model tesina24
     !writeln("\tmakespan = ", tempocarico)
     !writeln("\topesato = ", opesato)
     !writeln("\tZ Euristico Pesato = ", zpesato)
+
   end-procedure
-  
+
   procedure ordinamentoRdCrescente
     declarations
       used: array(lavori) of integer
       jmin: integer
       minimo: real
     end-declarations
-    forall(j in lavori) used(j):=0    
+    forall(j in lavori) used(j):=0
     forall(j in lavori) do
       minimo:= M
       forall(k in lavori) do
@@ -260,61 +325,8 @@ model tesina24
     !forall(j in lavori) write(tempiRD( order(j) ), " ")
     writeln("")
   end-procedure
-  
-  procedure EuristicoERD
-    declarations
-      carico: array(macchine) of real !carico di lavoro della macchina
-      indprec: array(macchine) of integer !indice precedente differenziato in base alle macchine per i tempi di setup e di lavoro
-      kmin, j, i: integer
-      minimo: real
-      diff_RD_T : real    !è la differenza tra il tempo di realease del job e dal carico(tempo) accumulato dai job precedenti sulla macchina
-      tempocarico: real
-      tardiness: real
-      Tard : array(lavori) of real   !array dei valori di tardiness dei job (usare T con mpvar come nel modello mi dà errore)
-    end-declarations
-    zpesato:=0
-    forall(k in macchine) do
-      carico(k):= disponibilita    !assegno il valore della disponibilità a carico(k) perchè non posso partire con i job finchè non raggiungo quel valore
-      indprec(k) := 1
-    end-do 
-    writeln("il carico prima di partire (",disponibilita,") è uguale a ",carico)
-    forall(indj in lavori) do
-      j:=order(indj)!seguiamo l'ordinamento imposto da order
-      minimo:=MAX_INT !massimo valore intero
-      forall(k in macchine) do
-        if ( carico(k) < minimo ) then
-          minimo:=carico(k)
-          kmin:=k 
-        end-if
-      end-do
-      diff_RD_T := tempiRD(j) - carico(kmin)
-      if( diff_RD_T > 0) then
-        carico(kmin) += diff_RD_T
-      end-if
-      oERD(j):=kmin !assegno lavoro j a macchina kmin
-      carico(kmin)+= tempiSetup(indprec(kmin),j,kmin) + tempiProc(j,kmin) !carico(kmin):=carico(kmin)+tempi(j)
-      !writeln("\ttemposetup = ", tempiSetup(indprec(kmin),j,kmin), " e tempoproc = ",tempiProc(j,kmin),"     jobprec=",indprec(kmin),"  jobsucc=", j, " macchina=",kmin)
-      tempocarico:=carico(kmin)
-      writeln("\til tempo di carico arrivati al job ",j," sulla macchina ",kmin," è uguale a ",carico(kmin))
-      tardiness := 0
-      if (tempocarico > tempiDD(j)) then
-        tardiness := tempocarico - tempiDD(j)
-      end-if
-      writeln("La due date del job ",j, " è uguale a ", tempiDD(j))
-      !writeln("\til tempo di carico del lavoro ",j," uguale a ", tempocarico)
-      Tard(j) := tardiness
-      writeln("\tla tardiness  del lavoro ",j," uguale a ", Tard(j))
-      zERD += alfa*Tard(j) + (1-alfa)*tempiSetup(indprec(kmin),j,kmin)
-      !writeln("\tzpesato è uguale a ", zpesato)
-      writeln("")
-      indprec(kmin):= j+1
-    end-do
-    writeln("SOLUZIONE ERD:")
-    writeln("\tmakespan = ", tempocarico)
-    writeln("\toERD = ", oERD)
-    writeln("\tZ ERD = ", zERD)
-  end-procedure
-  
+
+
   procedure ordinamentoCasuale
     !ordinamento casuale memorizzato in order
     declarations
