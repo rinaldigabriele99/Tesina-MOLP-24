@@ -9,11 +9,12 @@ model tesina24
   forward procedure Euristico
   forward procedure ordinamentoCasuale
   forward procedure move
+  forward procedure tabuSearch
 
   declarations
     n: integer !numero di lavori
     m: integer !numero di macchine
-    inputfile = 'datiproblema.dat' !inserisci il file di input
+    inputfile = 'datiproblema_2.dat' !inserisci il file di input
   end-declarations
 
   initialisations from inputfile
@@ -50,6 +51,7 @@ model tesina24
     pesi_random: array(lavori) of integer
     solution_status: string !stringa per stato del problema
     max_iter: integer ! massimo numero di iterazioni nel multi-start
+    tt: integer !lunghezza tabu tenure
   end-declarations
 
   !MAIN
@@ -105,7 +107,7 @@ model tesina24
   t1:=gettime
   ordinamentoCrescentePesato
   Euristico
-  max_iter:=1000
+  max_iter:=10
   zmove_best:= zEuristico
   omove_best:= oEuristico
   forall(iter in 1..max_iter) do
@@ -122,6 +124,12 @@ model tesina24
   writeln("SOLUZIONE RICERCA LOCALE:")
   writeln("\tzbest = ", zmove_best)
   writeln("\tobest = ", omove_best)
+
+  !metaeuristico tabu search
+  tt:= 50
+  ordinamentoCasuale
+  Euristico
+  tabuSearch
   !END OF MAIN
 
   procedure Scheduling_init
@@ -202,19 +210,63 @@ model tesina24
             end-if
           seqapp(k):= rj
         end-if
-        writeln("seqapp: ", seqapp)
+        !writeln("seqapp: ", seqapp)
         order:= seqapp
         Euristico
-        writeln("-----")
+        !writeln("-----")
         if (zEuristico < zmove) then
           zmove:= zEuristico
           omove:= oEuristico
         end-if
-        writeln(zmove,"--", omove, "--", zmove_best)
+        !writeln(zmove,"--", omove, "--", zmove_best)
       end-do
     end-do
   end-procedure
 
+  procedure tabuSearch
+    declarations
+      x_iniziale, x_best, x_iter: real
+      tl, ttemp: array(1..tt) of real
+      iter, conta: integer
+      trovato : boolean
+    end-declarations
+    trovato:= false
+    Euristico
+    x_iniziale:= zEuristico
+    x_best:= x_iniziale
+    !tl:= 0
+    iter:= 10
+    conta:= 0
+    while (conta < iter) do
+      conta+= 1
+      move
+      if(conta <= tt) then
+        tl(conta):= zmove
+      else
+        !l'ultimo deve uscire, z momentanea va al primo posto, e tutto scala di uno
+        ttemp:= tl
+        forall(i in 2..tt-1) do
+          tl(i):= ttemp(i-1)
+        end-do
+        tl(1):= zmove
+        writeln("$$$$$$$ ", ttemp , "$$$$$$ ", tl)
+      end-if
+      tl(conta):= zmove
+      forall(i in 1..tt) do
+        if (tl(i) = zmove) then
+          trovato:= true
+        end-if
+      end-do
+      if (trovato = false) then
+        x_iniziale:= zmove
+        if (x_iniziale < x_best) then
+          x_best:= x_iniziale
+        end-if
+      end-if
+    end-do
+    writeln("tl***************: ", tl)
+    writeln("SOLUZIONE TABU SEARCH: ", x_best)
+  end-procedure
 
   procedure ordinamentoCrescentePesato
     declarations
