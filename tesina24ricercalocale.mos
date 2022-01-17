@@ -1,0 +1,484 @@
+model tesina24aggiornata
+  options noimplicit
+  uses "mmxprs", "mmsystem"
+  forward procedure Print_Status !check all'uscita del modello
+  forward procedure Scheduling_init
+  forward procedure Scheduling_model
+  forward procedure ordinamentoCrescentePesato
+  forward procedure ordinamentoRdCrescente
+  forward procedure Euristico
+  forward procedure ordinamentoCasuale
+  forward procedure move
+  forward procedure tabuSearch
+
+  declarations
+    n: integer !numero di lavori
+    m: integer !numero di macchine
+    inputfile = 'dati10-2.dat' !inserisci il file di input
+  end-declarations
+
+  initialisations from inputfile
+    n
+    m
+  end-initialisations
+
+  declarations
+    lavori = 2..n+1  !range dei lavori
+    lavoriprima = 1..n+1   !lavori per i job i
+    lavoridopo = 2..n+2
+    macchine = 1..m !range delle macchine
+    disponibilita : real !disponibilità di una macchina ????!!!
+    tempiProc: array(lavori,macchine) of integer !tempi di processamento/elaborazione del lavoro j sulla macchina k
+    pesi : array(lavori) of integer !peso del lavoro j
+    tempiRD : array(lavori) of integer !release date del lavoro j
+    tempiDD : array(lavori) of integer !due date del lavoro j
+    tempiSetup : array(lavoriprima,lavori,macchine) of integer !tempi di setup per passare dal lavoro i al lavoro j sulla macchina k
+    alfa : real ! parametro relativo al peso della tardiness e dei tempi di setup nella funzione obiettivo
+    x : array(lavoriprima,lavoridopo,macchine) of mpvar !variabile di assegnamento ?????
+    M = 100 !costante molto grande a piacere
+    C : array(lavoriprima) of mpvar ! variabile associata al tempo di completamento del lavoro j
+    T : array(lavori) of mpvar ! variabile associata alla tardiness relativa al lavoro j
+    t1, t2: real !tempi
+    z: linctr !funzione obiettivo modello
+    order: array(lavori) of integer !ordinamento crescente
+    oEuristico: array(lavori) of integer
+    zEuristico: real
+    zbest: real !valore soluzione incumbent del multistart
+    obest: array(lavori) of integer !soluzione incumbent del multistart
+    zmove: real
+    zmove_best: real
+    omove_best: array(lavori) of integer
+    omove: array(lavori) of integer
+    ordermove: array(lavori) of integer !l'order migliore degli n*n nel move
+    ordermove_best: array(lavori) of integer !ci salviamo l'order del zmove_best
+    pesi_random: array(lavori) of integer
+    solution_status: string !stringa per stato del problema
+    max_iter: integer ! massimo numero di iterazioni nel multi-start
+    tt: integer !lunghezza tabu tenure
+    miglioro: boolean
+    box_order: array(lavori) of integer
+  end-declarations
+
+  !MAIN
+  !modello
+  Scheduling_init
+  Scheduling_model
+  t1:=gettime !tempo inizio esecuzione
+  minimise(z)
+  forall(k in macchine, j in lavoridopo, i in lavoriprima) do
+    if getsol(x(i,j,k)) > 0.1 then
+      writeln( "\t x(",i,",",j,",",k,") = ", getsol(x(i,j,k)))
+    end-if
+  end-do
+  forall(j in lavori) writeln( "\t C(",j,") = ", getsol(C(j)))
+  forall(j in lavori) writeln( "\t T(",j,") = ", getsol(T(j)))
+  t2:=gettime !tempo fine esecuzione
+  writeln("\tz = ", getobjval)
+  writeln("End running model")
+  writeln("Tempo esecuzione modello = ", t2-t1, "secondi")
+  Print_Status
+  writeln("Stato del problema = ", solution_status) !tipo di soluzione ottenuta
+
+  !Euristici
+  t1:=gettime !tempo inizio esecuzione
+  ordinamentoCrescentePesato
+  Euristico
+  t2:=gettime !tempo fine esecuzione
+  writeln("Tempo esecuzione Euristico Pesato = ", t2-t1, "secondi")
+  writeln("\topesato = ", oEuristico)
+  writeln("\tZ Euristico Pesato = ", zEuristico)
+
+  t1:=gettime !tempo inizio esecuzione
+  ordinamentoRdCrescente
+  Euristico
+  t2:=gettime !tempo fine esecuzione
+  writeln("Tempo esecuzione Euristico ERD = ", t2-t1, "secondi")
+  writeln("\toERD = ", oEuristico)
+  writeln("\tZ Euristico ERD = ", zEuristico)
+
+  !approccio multi-start
+  t1:=gettime !tempo inizio esecuzione
+  ordinamentoCrescentePesato
+  Euristico
+  zbest:=zEuristico
+  obest:=oEuristico
+  max_iter:=10000
+  forall(iter in 1..max_iter) do
+    ordinamentoCasuale !ordinamento random (guidato)
+    Euristico !euristicopesato (con ordinamento casuale)
+    if (zEuristico < zbest) then
+      zbest:=zEuristico
+      obest:=oEuristico
+    end-if
+  end-do
+  t2:=gettime !tempo fine esecuzione
+  writeln("Tempo esecuzione multi-start = ", t2-t1, "secondi")
+  writeln("SOLUZIONE MULTI-START:")
+  writeln("\tzbest = ", zbest)
+  writeln("\tobest = ", obest)
+
+  !ricerca locale
+  t1:=gettime
+  !ordinamentoCrescentePesato
+  order :: [6,5,4,3,2,7]
+  Euristico
+  max_iter:= 10
+  zmove_best:= zEuristico
+  omove_best:= oEuristico
+  ordermove_best := order
+  miglioro := true
+  forall(iter in 1..max_iter) do
+    !writeln("iterazione numero: ", iter)
+    !writeln("miglioro: ", miglioro)
+    move !ricerca locale con move (con ordinamento casuale)
+    if (zmove < zmove_best) then
+      zmove_best:=zmove
+      omove_best:=omove
+      ordermove_best := ordermove
+      miglioro:= true
+    else
+      miglioro := false
+    end-if
+    writeln("zmove tra i 36 = ", zmove, "  --  zbest generale: ", zmove_best)
+    writeln("ordermove tra i 36 = ", ordermove, "  --  ordermove_best: ", ordermove_best)
+    writeln("\tbox_order: ", box_order)
+  end-do
+  t2:=gettime
+  writeln("Tempo esecuzione multi-start = ", t2-t1, "secondi")
+  writeln("SOLUZIONE RICERCA LOCALE:")
+  writeln("\tzbest = ", zmove_best)
+  writeln("\tobest = ", omove_best)
+  writeln("\tordermovebest = ", ordermove_best)
+
+  !metaeuristico tabu search
+  tt:= 10
+  ordinamentoCasuale
+  Euristico
+  !tabuSearch
+  !END OF MAIN
+
+  procedure Scheduling_init
+    initialisations from inputfile
+      disponibilita
+      tempiProc
+      pesi
+      tempiRD
+      tempiDD
+      tempiSetup
+      alfa
+    end-initialisations
+    writeln("INPUT:")
+    writeln("\tlavori = ", lavori)
+    writeln("\tmacchine = ", macchine)
+    writeln("\ttempi di processamento = ", tempiProc)
+    writeln("\ttempi di release = ", tempiRD)
+    writeln("\ttempi di due date = ", tempiDD)
+    writeln("\ttempi di setup = ", tempiSetup)
+    writeln("\tpesi = ", pesi)
+    writeln("\talfa = ", alfa)
+    writeln("\tistante di inizio disponibilita macchina = ", disponibilita)
+
+    forall(i in lavoriprima, j in lavori, k in macchine) write("S(",i,",",j,",",k,")=", tempiSetup(i,j,k), " ")
+    writeln("")
+    forall(j in lavori, k in macchine) write("P(",j,",",k,")=", tempiProc(j,k), " ")
+    writeln("")
+    forall(j in lavori)  write("R(",j,")=", tempiRD(j), " ")
+    writeln("")
+    forall(j in lavori)  write("d(",j,")=", tempiDD(j), " ")
+    writeln("")
+
+  end-procedure
+
+  procedure Scheduling_model
+  ! abbiamo modificato la funzione obiettivo e la riga 191, dove i varia secondo lavoriprima(per considerare anche il job 1)
+  ! mettendo lavoriprima in alcune x e nelle corrispondenti Tardiness mette numeri molto piccoli al posto di 0
+    z:= sum(j in lavori) alfa*T(j) + sum(k in macchine, i in lavoriprima, j in lavori | j<>i) (1-alfa)*x(i,j,k)*tempiSetup(i,j,k)
+    !z:= sum (k in macchine, i in lavori, j in lavori) x(i,j,k)
+    forall(j in lavori) sum(k in macchine,i in lavoriprima | i<>j)  x(i,j,k) = 1
+    !forall(i in lavori, j in lavori, k in macchine) x(i,j,k) + x(j,i,k) <= 1
+    forall(k in macchine) sum(j in lavori) x(1,j,k) = 1
+    forall(k in macchine) sum(i in lavori) x(i,n+2,k) = 1
+    forall(k in macchine)
+      forall(j in lavori)
+        sum(i in lavoriprima | i<>j) x(i,j,k) = sum(i in lavoridopo | i<>j ) x(j,i,k)
+    forall(j in lavori)
+      C(j) >= tempiRD(j) + sum(k in macchine,i in lavoriprima | i<>j)  x(i,j,k)*tempiProc(j,k)
+    forall(i in lavoriprima)
+      forall(j in lavori | j<>i)
+        C(j) >= C(i) + sum(k in macchine) (x(i,j,k)*( tempiSetup(i,j,k) + tempiProc(j,k))) - M*(1- sum(k in macchine) x(i,j,k))
+    C(1) = disponibilita
+    forall(j in lavoriprima) C(j)>=0
+    forall(j in lavori) T(j) >= C(j) - tempiDD(j)
+    forall(j in lavori) T(j) >= 0
+    forall(i in lavoriprima)
+      forall(j in lavoridopo | j<>i)
+        forall(k in macchine)
+          x(i,j,k) is_binary
+  end-procedure
+
+
+  procedure move
+    declarations
+      seqapp : array(lavori) of integer
+      rp, rj: integer
+      box, prima: array(lavori) of integer
+    end-declarations
+    !seq:= order
+    zmove:= zEuristico
+    forall(j in lavori) do
+      forall(k in lavori) do
+        if (miglioro) then
+          seqapp:= ordermove_best
+          !ordermove:= ordermove_best
+        else
+          seqapp:= box_order
+        end-if
+        if(miglioro) then
+            if (k<j) then
+              rp:= ordermove_best(k)
+              seqapp(k):= seqapp(j)
+              forall(i in lavori | i>k and i<=j) seqapp(i):=ordermove_best(i-1)
+            else
+              rj:= ordermove_best(j)
+              seqapp(k):= seqapp(j)
+              forall(i in lavori | i>=j and i<=k)
+                if (i<>n+1) then
+                  seqapp(i):= ordermove_best(i+1)
+                end-if
+              seqapp(k):= rj
+            end-if
+        else
+            if (k<j) then
+              rp:= box_order(k)
+              seqapp(k):= seqapp(j)
+              forall(i in lavori | i>k and i<=j) seqapp(i):=box_order(i-1)
+            else
+              rj:= box_order(j)
+              seqapp(k):= seqapp(j)
+              forall(i in lavori | i>=j and i<=k)
+                if (i<>n+1) then
+                  seqapp(i):= box_order(i+1)
+                end-if
+              seqapp(k):= rj
+            end-if
+        end-if
+
+        if (j=2 and k=2) then
+          prima := seqapp
+        end-if
+        order:= seqapp
+        Euristico
+        !writeln("-----")
+        if (zEuristico < zmove) then
+          zmove:= zEuristico
+          omove:= oEuristico
+          ordermove:= seqapp
+        end-if
+        if (seqapp <> prima and seqapp <> ordermove_best) then
+          box := seqapp
+        end-if
+        writeln("seqapp: ", seqapp, "ordermove: ", ordermove, " zmove: ", zEuristico, " box: ", box, " prima ", prima)
+      end-do
+    end-do
+    box_order:= box
+  end-procedure
+
+  procedure tabuSearch
+    declarations
+      x_iniziale, x_best, x_iter: real
+      tl, ttemp: array(1..tt) of real
+      iter, conta: integer
+      trovato : boolean
+    end-declarations
+    x_iniziale:= zEuristico
+    x_best:= x_iniziale
+    !tl:= 0
+    iter:= 10000
+    conta:= 0
+    while (conta < iter) do
+      conta+= 1
+      !writeln("ITERAZIONE NUMERO: ", conta)
+      trovato:= false
+      ordinamentoCasuale
+      move
+      !writeln("\tzmove ", zmove)
+      forall(i in 1..tt) do
+        if (zmove = tl(i)) then
+          trovato:= true
+        end-if
+      end-do
+      !writeln("\t",trovato)
+      if (trovato = false) then
+        !l'ultimo deve uscire, z momentanea va al primo posto, e tutto scala di uno
+        ttemp:= tl
+        forall(i in 2..tt) do
+          tl(i):= ttemp(i-1)
+        end-do
+        tl(1):= zmove
+        !writeln("\t$$$$$$$ttemp ", ttemp , "$$$$$$tl ", tl)
+        !writeln("\t la tabu list è ", tl)
+        x_iniziale:= zmove
+        if (x_iniziale < x_best) then
+          !writeln ("x_iniziale: ", x_iniziale , "x_best: ", x_best)
+          x_best:= x_iniziale
+        end-if
+      end-if
+      !zEuristico := zmove
+    end-do
+    writeln("tl : ", tl)
+    writeln("SOLUZIONE TABU SEARCH: ", x_best)
+  end-procedure
+
+  procedure ordinamentoCrescentePesato
+    declarations
+      lista_TempisuPesi: array(lavori) of real
+      used: array(lavori) of integer
+      jmin: integer
+      minimo: real
+    end-declarations
+    forall(j in lavori) lista_TempisuPesi(j) := (tempiRD(j) + tempiDD(j)) / (2*pesi(j))
+    !writeln("\t lista tempi su pesi = ", lista_TempisuPesi)
+    forall(j in lavori) used(j):=0
+    forall(j in lavori) do
+      minimo:= M
+      forall(k in lavori) do
+        if (used(k)=0 and lista_TempisuPesi(k)<minimo) then
+          minimo:=lista_TempisuPesi(k)
+          jmin:=k
+        end-if
+      end-do
+      order(j):=jmin !indice del lavoro più grande non ancora selezionato
+      used(jmin):=1
+    end-do
+    !writeln("\tused = ",used)
+    !writeln("Ordinamento crescente:")
+    !writeln("\torder = ",order)
+    !write("\ttempi ordinati = ")
+    !forall(j in lavori) write(lista_TempisuPesi( order(j) ), " ")
+    writeln("")
+  end-procedure
+
+  procedure Euristico
+    declarations
+      carico: array(macchine) of real !carico di lavoro della macchina
+      indprec: array(macchine) of integer !indice precedente differenziato in base alle macchine per i tempi di setup e di lavoro
+      kmin, j, i: integer
+      minimo: real
+      diff_RD_T : real    !è la differenza tra il tempo di realease del job e dal carico(tempo) accumulato dai job precedenti sulla macchina
+      tempocarico: real
+      tardiness: real
+      Tard : array(lavori) of real   !array dei valori di tardiness dei job (usare T con mpvar come nel modello mi dà errore)
+    end-declarations
+    zEuristico:=0
+    forall(k in macchine) do
+      carico(k):= disponibilita    !assegno il valore della disponibilità a carico(k) perchè non posso partire con i job finchè non raggiungo quel valore
+      indprec(k) := 1
+    end-do
+    !writeln("il carico prima di partire (",disponibilita,") è uguale a ",carico)
+    forall(indj in lavori) do
+      j:=order(indj)!seguiamo l'ordinamento imposto da order
+      minimo:=MAX_INT !massimo valore intero
+      forall(k in macchine) do
+        if ( carico(k) < minimo ) then
+          minimo:=carico(k)
+          kmin:=k
+        end-if
+      end-do
+      carico(kmin) +=  tempiSetup(indprec(kmin),j,kmin)
+      diff_RD_T := tempiRD(j) - carico(kmin)
+      if( diff_RD_T > 0) then
+        carico(kmin) += diff_RD_T
+      end-if
+      oEuristico(j):=kmin !assegno lavoro j a macchina kmin
+      carico(kmin)+= tempiProc(j,kmin) !carico(kmin):=carico(kmin)+tempi(j)
+      !writeln("\ttemposetup = ", tempiSetup(indprec(kmin),j,kmin), " e tempoproc = ",tempiProc(j,kmin),"     jobprec=",indprec(kmin),"  jobsucc=", j, " macchina=",kmin)
+      tempocarico:=carico(kmin)
+      !writeln("\til tempo di carico arrivati al job ",j," sulla macchina ",kmin," è uguale a ",carico(kmin))
+      tardiness := 0
+      if (tempocarico > tempiDD(j)) then
+        tardiness := tempocarico - tempiDD(j)
+      end-if
+      !writeln("La due date del job ",j, " è uguale a ", tempiDD(j))
+      !writeln("\til tempo di carico del lavoro ",j," uguale a ", tempocarico)
+      Tard(j) := tardiness
+      !writeln("\tla tardiness  del lavoro ",j," uguale a ", Tard(j))
+      zEuristico += alfa*Tard(j) + (1-alfa)*tempiSetup(indprec(kmin),j,kmin)
+      !writeln("\tzpesato è uguale a ", zpesato)
+      !writeln("")
+      indprec(kmin):= j
+    end-do
+    !writeln("SOLUZIONE EuristicoPesato:")
+    !writeln("\tmakespan = ", tempocarico)
+    !writeln("\topesato = ", opesato)
+    !writeln("\tZ Euristico Pesato = ", zpesato)
+
+  end-procedure
+
+  procedure ordinamentoRdCrescente
+    declarations
+      used: array(lavori) of integer
+      jmin: integer
+      minimo: real
+    end-declarations
+    forall(j in lavori) used(j):=0
+    forall(j in lavori) do
+      minimo:= M
+      forall(k in lavori) do
+        if (used(k)=0 and tempiRD(k)<minimo) then
+          minimo:=tempiRD(k)
+          jmin:=k
+        end-if
+      end-do
+      order(j):=jmin !indice del lavoro più grande non ancora selezionato
+      used(jmin):= 1
+    end-do
+    !writeln("\tused = ",used)
+    !writeln("Ordinamento crescente RD:")
+    !writeln("\torder = ",order)
+    !write("\ttempi ordinati = ")
+    !forall(j in lavori) write(tempiRD( order(j) ), " ")
+    writeln("")
+  end-procedure
+
+
+  procedure ordinamentoCasuale
+    !ordinamento casuale memorizzato in order
+    declarations
+      used: array(lavori) of integer
+      !pesi_random: array(lavori) of integer   !randomizziamo solo i pesi, tenendo invariati tutti i tempi
+      massimo, jmax: integer
+    end-declarations
+
+    !forall(j in lavori) tempi_random(j):= ceil( random*100 ) !valori casuali tra 1 e 100
+    forall(j in lavori) pesi_random(j):= ceil(pesi(j)*0.3 + random*pesi(j)*1)
+    forall(j in lavori) used(j):=0
+    forall(j in lavori) do
+      massimo:= -MAX_INT !MAX_INT = massimo valore intero in Xpress Mosel
+      forall(i in lavori) do
+        !if (used(i)=0 and tempi(i)>massimo) then
+        if (used(i)=0 and pesi_random(i)>massimo) then
+          massimo:=pesi_random(i)
+          jmax:=i
+        end-if
+      end-do
+      order(j):=jmax !indice del lavoro più grande non ancora selezionato
+      used(jmax):=1
+    end-do
+    !writeln("Ordinamento random:")
+    !writeln("\torder = ",order)
+    !write("\ttempi ordinati = ")
+    !forall(j in lavori) write(tempi_random( order(j) ), " ")
+    !writeln("")
+  end-procedure
+
+  procedure Print_Status
+	  case getprobstat of
+		  XPRS_OPT: solution_status:="Optimum found"
+		  XPRS_UNF: solution_status:="Unfinished"
+		  XPRS_INF: solution_status:="Infeasible"
+		  XPRS_UNB: solution_status:="Unbounded"
+		  XPRS_OTH: solution_status:="Failed"
+		  else solution_status:="???"
+	  end-case
+  end-procedure
+end-model
